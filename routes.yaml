@@ -1,0 +1,20 @@
+# routes.yaml
+# All project routes are defined here
+
+# the only API endpoint route
+routeSmsSend:
+  path:       /sms/send
+  controller: Sms::send
+  methods:    GET
+
+# report page route
+routeSmsReport:
+  path:       /sms/report
+  controller: Sms::report
+  methods:    GET
+
+# report page search route
+routeSmsSearch:
+  path:       /sms/report/{phone}
+  controller: Sms::search
+  methods:    GET
