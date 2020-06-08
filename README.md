@@ -14,6 +14,9 @@ One can find the related these two simple codes in folders [API1](APIs/1/) and [
 We use Symfony Routing Component which can be installed using
 ```
 $ composer require symfony/routing
+$ composer require symfony/config
+$ composer require symfony/http-foundation
+$ composer require symfony/yaml
 ```
 
 ## Usage
