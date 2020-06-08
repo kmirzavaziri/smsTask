@@ -8,7 +8,7 @@ localhost:81/sms/send/?number={PHONE_NUMBER}&body={MESSAGE_BODY}
 localhost:82/sms/send/?number={PHONE_NUMBER}&body={MESSAGE_BODY}
 ```
 
-One can find the related these two simple codes in folders [API1](APIs/1/) and [API1](APIs/2/). 
+One can find the related these two simple codes in folders [API1](APIs/1/) and [API2](APIs/2/). 
 
 ## Dependencies
 We use Symfony Routing Component which can be installed using
