@@ -12,6 +12,7 @@ One can find the related these two simple codes in folders [API1](APIs/1/) and [
 
 ## Dependencies
 We use Symfony Routing Component which can be installed using
+
 ```
 $ composer require symfony/routing
 $ composer require symfony/config
@@ -19,10 +20,40 @@ $ composer require symfony/http-foundation
 $ composer require symfony/yaml
 ```
 
+## Installation
+First go to the following link
+
+```
+localhost:80
+```
+
+If the app is installed, you'll see a link to report page
+
+```
+localhost:80/sms/report
+```
+
+and a link to uninstall page
+
+```
+localhost:80/sms/uninstall
+```
+
+Otherwise, you'll see a link to installation page
+
+```
+localhost:80/sms/install
+```
+
 ## Usage
-Call it using the following
+One can call the API using the following
 
 ```
 localhost:80/sms/send/?number={PHONE_NUMBER}&body={MESSAGE_BODY}
 ```
 
+and visit the report page by
+
+```
+localhost:80/sms/report
+```

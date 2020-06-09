@@ -1,6 +1,24 @@
 # routes.yaml
 # All project routes are defined here
 
+# index page route
+routeSmsIndex:
+  path:       /
+  controller: Sms::index
+  methods:    GET
+
+# install page route
+routeSmsInstall:
+  path:       /sms/install
+  controller: Sms::install
+  methods:    GET
+
+# uninstall page route
+routeSmsUninstall:
+  path:       /sms/uninstall
+  controller: Sms::uninstall
+  methods:    GET
+
 # the only API endpoint route
 routeSmsSend:
   path:       /sms/send
