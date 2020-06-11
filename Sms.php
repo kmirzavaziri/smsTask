@@ -11,8 +11,99 @@ require_once "config.php";
 class Sms{
     # send sms by calling send sms APIs
     public static function send(){
-        echo "send";
-        # TODO
+        # init result structure
+        $result = [
+            "status" => false,
+            "error" => "",
+            "api" => "0",
+        ];
+
+        ## check body
+        # check if body is set
+        if(!isset($_GET["body"])){
+            $result["error"] = "ERR_NO_BODY";
+            echo json_encode($result);
+            return;
+        }
+
+        # check body length
+        if(strlen($_GET["body"]) > Config::BODY_MAX_LEN){
+            $result["error"] = "ERR_BODY_MAX_LEN_REACHED";
+            echo json_encode($result);
+            return;
+        }
+
+        $body = $_GET["body"];
+
+        ## check number
+        # check if number is set
+        if(!isset($_GET["number"])){
+            $result["error"] = "ERR_NO_NUMBER";
+            echo json_encode($result);
+            return;
+        }
+
+        # check number length
+        if(strlen($_GET["number"]) < Config::NUMBER_LEN){
+            $result["error"] = "ERR_TOO_SHORT_NUMBER";
+            echo json_encode($result);
+            return;
+        }
+
+        # unify number format
+        $number = Config::NUMBER_PREFIX.substr($_GET["number"], -Config::NUMBER_LEN);
+
+        # build query for external sms API
+        $data = http_build_query(
+            [
+                "body" => $body,
+                "number" => $number,
+            ]
+        );
+
+        # shuffle API URLs (we don't want to put all the pressure on the first one)
+        $apiKeys = array_keys(Config::API_URLS);
+        shuffle($apiKeys);
+
+        # try with each random API till success or APIs end
+        $result["error"] = "ERR_EXTERNAL_API";
+        foreach($apiKeys as $apiKey){
+            try{
+                $apiResult = self::askApi($apiKey, $data);
+                $apiResult = json_decode($apiResult, true);
+                # set result parameters and end the loop if the sms is successfully sent
+                if(isset($apiResult["status"]) and $apiResult["status"] === true){
+                    $result["status"] = true;
+                    $result["error"] = "";
+                    $result["api"] = $apiKey;
+                    break;
+                }
+            }
+            catch (Exception $e){}    
+        }
+
+        # try to insert this sms record to database
+        try{
+            $id = self::storeSms($body, $number, $result["api"], $result["status"]);
+        }
+        catch(Exception $e){
+            $result["status"] = false;
+            $result["error"] = "ERR_DATABASE";
+            $result["api"] = "0";
+            echo json_encode($result);
+            return;
+        }
+
+        # add sms to queue of unsent messages if send process was failed
+        if(!$result["status"]){
+			$redis = new \Predis\Client();
+            $redis->connect('localhost', 6379);
+            $redis->lpush("smsQueue", $id);
+        }
+
+        # echo result in JSON format
+        echo json_encode($result);
+        return;
     }
 
     # echo simple html report page
@@ -21,9 +112,9 @@ class Sms{
         # TODO
     }
 
-    # search for sms records in db with specific phone and echo the records
-    public static function search($phone){
-        echo "search: $phone";
+    # search for sms records in db with specific number and echo the records
+    public static function search($number){
+        echo "search: $number";
         # TODO
     }
 
@@ -50,16 +141,18 @@ class Sms{
 
             CREATE TABLE sms (
                 id INT(6) UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-                phone VARCHAR(12) NOT NULL,
+                number VARCHAR(12) NOT NULL,
                 body TEXT NOT NULL,
-                sms_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                tries TEXT NOT NULL
+                api INT(6) UNSIGNED,
+                request_time TIMESTAMP,
+                sent_time TIMESTAMP,
+                sent TINYINT(1) UNSIGNED
             );
 
             DROP TABLE IF EXISTS users;
 
             CREATE TABLE users (
-                phone VARCHAR(12) NOT NULL PRIMARY KEY,
+                number VARCHAR(12) NOT NULL PRIMARY KEY,
                 sms_ids TEXT NOT NULL
             );
 
@@ -68,7 +161,7 @@ class Sms{
         # try to connect and recreate database
         try{
             $conn = self::connect();
-            if ($conn->multi_query($query) === TRUE)
+            if ($conn->multi_query($query) === true)
                 echo "App installed successfully";
             else
                 echo "Installation failed with message: {$conn->error}";
@@ -90,7 +183,7 @@ class Sms{
         # try to connect and remove database
         try{
             $conn = self::connect();
-            if ($conn->multi_query($query) === TRUE)
+            if ($conn->multi_query($query) === true)
                 echo "App uninstalled successfully";
             else
                 echo "Uninstall process failed with message: {$conn->error}";
@@ -111,8 +204,19 @@ class Sms{
         # TODO
     }
 
-    # return ten phone numbers with most sms records
+    # return ten number numbers with most sms records
     private static function getTopTen(){
+        # TODO
+    }
+
+    # return queue of unsent messages
+    private static function getQueue(){
+        # TODO
+    }
+
+    # try to send all unsent messages in queue
+    private static function clearQueue(){
+        echo "clearQueue";
         # TODO
     }
 
@@ -135,7 +239,7 @@ class Sms{
     }
 
     # return a sql db connection object
-    private static function connect(){        
+    private static function connect(){
         $conn = new mysqli(Config::DB_HOST, Config::DB_USER, Config::DB_PASSWORD, Config::DB_NAME);
 
         # throw an exception if there is an error
@@ -144,5 +248,98 @@ class Sms{
 
         return $conn;
     }
+
+    # sends a get request to one of api addresses defined
+    # in config.php according to $apiKey. returns the result
+    private static function askApi($apiKey, $data){   
+        $options = array(
+            "http" => array(
+                "header"  => "Content-type: application/x-www-form-urlencoded",
+                "method"  => "GET",
+                "content" => $data,
+            ),
+        );
+         
+        $context = stream_context_create($options);
+         
+        return file_get_contents(Config::API_URLS[$apiKey], false, $context);
+    }
     
+    # store one sms in database and add it to list of sms ids of
+    # user table. add new record for user if doesn't exists.
+    private static function storeSms($body, $number, $api, $sent){
+        # set up database connection
+        $conn = self::connect();
+
+        ## insert sms to sms table
+        # set up request time and sent time
+        $now = date("Y-m-d H:i:s");
+        $request_time = $now;
+        $sent_time = $sent ? $now : 0;
+        
+        # insert the data
+        $findQuery = $conn->prepare("
+            INSERT INTO
+                sms    (number, body, api, request_time, sent_time, sent)
+                VALUES (?     , ?   , ?  , ?           , ?        , ?   )
+        ");
+        if ($findQuery === false)
+            throw new Exception($conn->error);
+        # string number, string body, int api, string request_time, string sent_time, intval(boolean) sent
+        $findQuery->bind_param("ssissi", $number, $body, $api, $request_time, $sent_time, intval($sent));
+        $findQuery->execute();
+        $id = $conn->insert_id;
+        
+        ## insert/update user to users table
+        # current list of sms ids
+        $smsIds = [];
+
+        # query string for update/insert the user
+        $userQuery = $conn->prepare("");
+
+        # check if user exists in database or we need to add new record.
+        # if exists, we get its list of sms ids to append new sms to it.
+        $findQuery = $conn->prepare("
+            SELECT sms_ids FROM users WHERE number = ?
+        ");
+        if ($findQuery === false)
+            throw new Exception($conn->error);
+        $findQuery->bind_param("s", $number);        
+        $findQuery->execute();
+        
+        $result = $findQuery->get_result();
+        if($user = $result->fetch_assoc()){
+            # try to decode JSON stored in database
+            try{
+                $smsIds = json_decode($user['sms_ids']);
+            }
+            catch(Exception $e){
+                # just assume it's empty if couldn't decode it
+                $smsIds = [];
+            }
+
+            $userQuery = $conn->prepare("
+                UPDATE users SET
+                    sms_ids = ?
+                WHERE number = ?
+            ");
+        }
+        else{
+            $smsIds = [];
+            $userQuery = $conn->prepare("
+                INSERT INTO
+                    users  (sms_ids, number)
+                    VALUES (?      , ?     )
+            ");
+        }
+
+        # encode the JSON and update/insert the user
+        $smsIds[] = $id;
+        $smsIds = json_encode($smsIds);
+
+        $userQuery->bind_param("ss", $smsIds, $number);
+        $userQuery->execute();
+
+    }
+
 }
