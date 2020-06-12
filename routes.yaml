@@ -37,8 +37,14 @@ routeSmsSearch:
   controller: Sms::search
   methods:    GET
 
-# the only API endpoint route
+# clear queue page route
 routeClearQueue:
   path:       /sms/clear_queue
   controller: Sms::clearQueue
+  methods:    GET
+
+# test page route
+routeTest:
+  path:       /sms/test
+  controller: Sms::test
   methods:    GET

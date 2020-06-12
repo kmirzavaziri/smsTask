@@ -69,3 +69,12 @@ Also you may send request to the following link in specific periods of time to a
 ```
 localhost:80/sms/clear_queue
 ```
+
+## Test
+One can send random requests to api using
+
+```
+localhost:80/sms/test
+```
+
+This will generate 20 different number and send requests with each of numbers, 5 to 30 times (randomly), each with random body.

@@ -119,6 +119,41 @@ class Sms{
             ";
         }
 
+        # top ten numbers
+        $users = self::getTopTen();
+        echo "
+            <h1>Top Ten Numbers:</h1>
+            <style>
+                table {
+                    border-collapse: collapse;
+                }
+                table, th, td {
+                    border: 1px solid black;
+                }
+                th, td {
+                    text-align: center;
+                }
+            </style>
+            <table>
+                <tr>
+                    <th>rank</th>
+                    <th>number</th>
+                    <th>sms_count</th>
+                </tr>
+        ";
+        foreach($users as $user)
+            echo "
+                <tr>
+                    <td>{$user['rank']}</td>
+                    <td>{$user['number']}</td>
+                    <td>{$user['sms_count']}</td>
+                </tr>
+            ";
+
+        echo "
+            </table>
+        ";
+        
         # unsent messages queue
         $queue = implode(", ", self::getQueue());
         echo "
@@ -176,7 +211,8 @@ class Sms{
 
             CREATE TABLE users (
                 number VARCHAR(12) NOT NULL PRIMARY KEY,
-                sms_ids TEXT NOT NULL
+                sms_ids TEXT NOT NULL,
+                sms_count INT(6) UNSIGNED
             );
 
             DROP TABLE IF EXISTS apis;
@@ -186,11 +222,12 @@ class Sms{
                 requests INT(6) UNSIGNED,
                 fails INT(6) UNSIGNED
             );
-
-            INSERT INTO apis (api_key, requests, fails) VALUES (1, 0, 0);
-            INSERT INTO apis (api_key, requests, fails) VALUES (2, 0, 0);
         ";
-        
+
+        $apiKeys = array_keys(Config::API_URLS);
+        foreach($apiKeys as $apiKey)
+            $query .= "INSERT INTO apis (api_key, requests, fails) VALUES ($apiKey, 0, 0);";
+
         # try to connect and recreate database
         try{
             $conn = self::connect();
@@ -305,19 +342,35 @@ class Sms{
                 $info = [
                     "requests" => $data["requests"],
                     "fails" => $data["fails"],
-                    "failure_percentage" => $data["requests"] != 0 ? $data["fails"] / $data["requests"] * 100 : 0,
-                ];                
+                    "failure_percentage" => $data["requests"] != 0 ? $data["fails"] / $data["requests"] * 100 : 0
+                ];
+        }
+        catch (Exception $e){}
 
-            return $info;
-        }
-        catch (Exception $e){
-            return $info;
-        }
+        return $info;
     }
 
     # return ten number numbers with most sms records
     private static function getTopTen(){
-        # TODO
+        $users = [];
+        try{
+            $conn = self::connect();
+            $query = "SELECT number, sms_count FROM users ORDER BY sms_count DESC";
+            $result = $conn->query($query);
+
+            $i = 0;
+            while($user = $result->fetch_assoc() and $i < 10){
+                $users[] = [
+                    "rank" => $i + 1,
+                    "number" => $user["number"],
+                    "sms_count" => $user["sms_count"]
+                ];
+                $i++;
+            }
+        }
+        catch (Exception $e){}
+
+        return $users;
     }
 
     # return queue of unsent messages
@@ -358,18 +411,8 @@ class Sms{
 
     # sends a get request to one of api addresses defined
     # in config.php according to $apiKey. returns the result
-    private static function askApi($apiKey, $data){
-        $options = array(
-            "http" => array(
-                "header"  => "Content-type: application/x-www-form-urlencoded",
-                "method"  => "GET",
-                "content" => $data,
-            ),
-        );
-         
-        $context = stream_context_create($options);
-
-        return file_get_contents(Config::API_URLS[$apiKey], false, $context);
+    private static function askApi($apiUrl, $data){
+        return file_get_contents("$apiUrl?$data");
     }
     
     # try with all APIs in random order, till success or APIs end
@@ -392,7 +435,7 @@ class Sms{
 
             # try current api
             try{
-                $apiResult = self::askApi($apiKey, $data);
+                $apiResult = self::askApi(Config::API_URLS[$apiKey], $data);
                 $apiResult = json_decode($apiResult, true);
                 if(isset($apiResult["status"]) and $apiResult["status"] === true)
                     $status = true;
@@ -451,14 +494,17 @@ class Sms{
         ## insert/update user to users table
         # current list of sms ids
         $smsIds = [];
+        # current number of messages
+        $smsCount = 0;
 
         # query string for update/insert the user
         $userQuery = $conn->prepare("");
 
         # check if user exists in database or we need to add new record.
         # if exists, we get its list of sms ids to append new sms to it.
+        # we also get their sms count to increment it.
         $findQuery = $conn->prepare("
-            SELECT sms_ids FROM users WHERE number = ?
+            SELECT sms_ids, sms_count FROM users WHERE number = ?
         ");
         if ($findQuery === false)
             throw new Exception($conn->error);
@@ -470,15 +516,18 @@ class Sms{
             # try to decode JSON stored in database
             try{
                 $smsIds = json_decode($user['sms_ids']);
+                $smsCount = $user['sms_count'];
             }
             catch(Exception $e){
                 # just assume it's empty if couldn't decode it
                 $smsIds = [];
+                $smsCount = 0;
             }
 
             $userQuery = $conn->prepare("
                 UPDATE users SET
-                    sms_ids = ?
+                    sms_ids = ?,
+                    sms_count = ?
                 WHERE number = ?
             ");
         }
@@ -486,22 +535,71 @@ class Sms{
             $smsIds = [];
             $userQuery = $conn->prepare("
                 INSERT INTO
-                    users  (sms_ids, number)
-                    VALUES (?      , ?     )
+                    users  (sms_ids, sms_count, number)
+                    VALUES (?      , ?        , ?     )
             ");
         }
 
-        # encode the JSON and update/insert the user
+        # append the list and JSON encode it, increment the sms count, and update/insert the user
         $smsIds[] = $id;
         $smsIds = json_encode($smsIds);
 
+        $smsCount++;
+
         if ($findQuery === false)
             throw new Exception($conn->error);
-        $userQuery->bind_param("ss", $smsIds, $number);
+        $userQuery->bind_param("sis", $smsIds, $smsCount, $number);
         $userQuery->execute();
 
         return $id;
 
     }
 
+    # send some random requests with 20 random numbers to our api
+    public static function test(){
+        for ($i = 0; $i < 20; $i++){
+            # generate a random number
+            $number = "";
+            for ($j = 0; $j < 9; $j++)
+                $number .= rand(0, 9);
+
+            # generate random number of api requests
+            $requests = rand(5, 30);
+
+            echo "
+                <h3 style='color: rgb(66, 107, 220);'>Number: $number</h3>
+                <h3 style='color: rgb(66, 107, 220);'>Requests: $requests</h3>
+            ";
+
+            # generate and send each request
+            for ($j = 0; $j < $requests; $j++){
+                # generate random length for body
+                $length = rand(5, 30);
+
+                # generate random body
+                # more chance of spaces
+                $characters = " 0123456789 abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ ";
+                $body = "";
+                for ($k = 0; $k < $length; $k++)
+                    $body .= $characters[rand(0, strlen($characters) - 1)];
+                
+                # send request
+                $data = http_build_query(
+                    [
+                        "body" => $body,
+                        "number" => $number,
+                    ]
+                );
+                $apiResult = self::askApi("http://localhost:80/sms/send/", $data);
+                echo "
+                    <h4>Request:</h4>
+                    <b>number</b>: $number<br>
+                    <b>body</b>: $body<br>
+                    <h4>Response:</h4>
+                    $apiResult<br>
+                    <hr>
+                ";
+            }
+        }
+    }
 }
