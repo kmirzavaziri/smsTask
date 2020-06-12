@@ -53,58 +53,24 @@ class Sms{
         # unify number format
         $number = Config::NUMBER_PREFIX.substr($_GET["number"], -Config::NUMBER_LEN);
 
-        # build query for external sms API
-        $data = http_build_query(
-            [
-                "body" => $body,
-                "number" => $number,
-            ]
-        );
-
         # shuffle API URLs (we don't want to put all the pressure on the first one)
         $apiKeys = array_keys(Config::API_URLS);
         shuffle($apiKeys);
 
-        # try with each random API till success or APIs end
-        $result["error"] = "ERR_EXTERNAL_API";
-        foreach($apiKeys as $apiKey){
-            $failure = 0;
-            try{
-                $apiResult = self::askApi($apiKey, $data);
-                $apiResult = json_decode($apiResult, true);
-                # set result parameters
-                if(isset($apiResult["status"]) and $apiResult["status"] === true){
-                    $result["status"] = true;
-                    $result["error"] = "";
-                    $result["api"] = $apiKey;
-                }
-                else{
-                    $failure = 1;
-                }
-            }
-            catch (Exception $e){
-                $failure = 1;
-            }
-
-            # update api info in database
-            $query = "
-                UPDATE apis SET
-                    requests = requests + 1,
-                    fails = fails + $failure
-                WHERE
-                    api_key = $apiKey
-            ";
-            try{
-                $conn = self::connect();
-                $conn->query($query);
-            }
-            catch (Exception $e){}
-
-            # end the loop if the sms is successfully sent
-            if($result["status"] == true)
-                break;
+        # try all APIs
+        $apiKey = self::sendTryAll($body, $number);
+        if($apiKey !== false){
+            $result["status"] = true;
+            $result["error"] = "";
+            $result["api"] = $apiKey;
+        }
+        else{
+            $result["status"] = false;
+            $result["error"] = "ERR_EXTERNAL_API";
+            $result["api"] = 0;
         }
 
+        $id = null;
         # try to insert this sms record to database
         try{
             $id = self::storeSms($body, $number, $result["api"], $result["status"]);
@@ -118,10 +84,10 @@ class Sms{
         }
 
         # add sms to queue of unsent messages if send process was failed
-        if(!$result["status"]){
+        if(!$result["status"] and $id != null){
 			$redis = new \Predis\Client();
             $redis->connect('localhost', 6379);
-            $redis->lpush("smsQueue", $id);
+            $redis->rpush("smsQueue", $id);
         }
 
         # echo result in JSON format
@@ -152,6 +118,16 @@ class Sms{
                 </h2>
             ";
         }
+
+        # unsent messages queue
+        $queue = implode(", ", self::getQueue());
+        echo "
+            <hr>
+            <h1>Unsent Messages Queue:</h1>
+            $queue
+            <h3><a href='/sms/clear_queue'>Clear Queue</a></h3>
+            <hr>
+        ";
     }
 
     # search for sms records in db with specific number and echo the records
@@ -177,6 +153,11 @@ class Sms{
 
     # create db table for sms and echo success or failure message
     public static function install(){
+        # empty redis unsent messages queue
+        $redis = new \Predis\Client();
+        $redis->connect('localhost', 6379);
+        $redis->del("smsQueue");
+
         # sql query
         $query = "
             DROP TABLE IF EXISTS sms;
@@ -186,8 +167,8 @@ class Sms{
                 number VARCHAR(12) NOT NULL,
                 body TEXT NOT NULL,
                 api INT(6) UNSIGNED,
-                request_time TIMESTAMP,
-                sent_time TIMESTAMP,
+                request_time TIMESTAMP NULL DEFAULT NULL,
+                sent_time TIMESTAMP NULL DEFAULT NULL,
                 sent TINYINT(1) UNSIGNED
             );
 
@@ -221,11 +202,17 @@ class Sms{
         catch (Exception $e){
             echo "Installation failed with message: {$e->getMessage()}";
         }
+
         echo "<h3><a href='/'>Back to Index</a></h3>";
     }
     
     # remove db table for sms and echo success or failure message
     public static function uninstall(){
+        # empty redis unsent messages queue
+        $redis = new \Predis\Client();
+        $redis->connect('localhost', 6379);
+        $redis->del("smsQueue");
+
         # sql query
         $query = "
             DROP TABLE IF EXISTS sms;
@@ -245,6 +232,47 @@ class Sms{
             echo "Uninstall process failed with message: {$e->getMessage()}";
         }
         echo "<h3><a href='/'>Back to Index</a></h3>";
+    }
+
+    # try to send all unsent messages in queue
+    public static function clearQueue(){
+        # get list of unsent messages and clear it (will add them if can't send again)
+        $redis = new \Predis\Client();
+        $redis->connect('localhost', 6379);
+        $queue = $redis->lrange("smsQueue", 0, -1);
+        $redis->del("smsQueue");
+
+        # try to send each of unsent messages
+        foreach($queue as $smsId){
+            $sent = false;
+            try{
+                $conn = self::connect();
+                $query = "SELECT body, number FROM sms WHERE id = $smsId";
+                $result = $conn->query($query);
+                
+                if($data = $result->fetch_assoc()){
+                    $apiKey = self::sendTryAll($data['body'], $data['number']);
+                    # update sms info in db on success send
+                    if($apiKey !== false){
+                        $sent = true;
+                        $query = "UPDATE sms SET api = $apiKey, sent = 1, sent_time = CURRENT_TIMESTAMP WHERE id = $smsId";
+                        $conn->query($query);
+                    }
+                }
+            }
+            catch(Exception $e){}
+
+            # echo proper message and add id to queue if can't send
+            if($sent){
+                echo "sent <b>$smsId</b> successfully.<br>";
+            }
+            else{
+                echo "failed to send <b>$smsId</b>.<br>";
+                $redis->rpush("smsQueue", $smsId);
+            }
+        }
+
+        echo "<h3><a href='/sms/report'>Back to Report</a></h3>";
     }
 
     # return number of sms records
@@ -294,13 +322,9 @@ class Sms{
 
     # return queue of unsent messages
     private static function getQueue(){
-        # TODO
-    }
-
-    # try to send all unsent messages in queue
-    private static function clearQueue(){
-        echo "clearQueue";
-        # TODO
+        $redis = new \Predis\Client();
+        $redis->connect('localhost', 6379);
+        return $redis->lrange("smsQueue", 0, -1);
     }
 
     # checks if the app is installed
@@ -334,7 +358,7 @@ class Sms{
 
     # sends a get request to one of api addresses defined
     # in config.php according to $apiKey. returns the result
-    private static function askApi($apiKey, $data){   
+    private static function askApi($apiKey, $data){
         $options = array(
             "http" => array(
                 "header"  => "Content-type: application/x-www-form-urlencoded",
@@ -348,6 +372,57 @@ class Sms{
         return file_get_contents(Config::API_URLS[$apiKey], false, $context);
     }
     
+    # try with all APIs in random order, till success or APIs end
+    private static function sendTryAll($body, $number){
+        # build query for external sms API
+        $data = http_build_query(
+            [
+                "body" => $body,
+                "number" => $number,
+            ]
+        );
+
+        # shuffle API URLs (we don't want to put all the pressure on the first one)
+        $apiKeys = array_keys(Config::API_URLS);
+        shuffle($apiKeys);
+
+        # try with each one
+        foreach($apiKeys as $apiKey){
+            $status = false;
+
+            # try current api
+            try{
+                $apiResult = self::askApi($apiKey, $data);
+                $apiResult = json_decode($apiResult, true);
+                if(isset($apiResult["status"]) and $apiResult["status"] === true)
+                    $status = true;
+            }
+            catch (Exception $e){}
+
+            # update api info in database
+            $failure = 1;
+            if($status)
+                $failure = 0;                
+            $query = "
+                UPDATE apis SET
+                    requests = requests + 1,
+                    fails = fails + $failure
+                WHERE
+                    api_key = $apiKey
+            ";
+            try{
+                $conn = self::connect();
+                $conn->query($query);
+            }
+            catch (Exception $e){}
+
+            # end the loop if the sms is successfully sent
+            if($status == true)
+                return $apiKey;
+        }
+        return false;
+    }
+
     # store one sms in database and add it to list of sms ids of
     # user table. add new record for user if doesn't exists.
     private static function storeSms($body, $number, $api, $sent){
@@ -424,6 +499,8 @@ class Sms{
             throw new Exception($conn->error);
         $userQuery->bind_param("ss", $smsIds, $number);
         $userQuery->execute();
+
+        return $id;
 
     }
 
