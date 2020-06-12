@@ -68,18 +68,41 @@ class Sms{
         # try with each random API till success or APIs end
         $result["error"] = "ERR_EXTERNAL_API";
         foreach($apiKeys as $apiKey){
+            $failure = 0;
             try{
                 $apiResult = self::askApi($apiKey, $data);
                 $apiResult = json_decode($apiResult, true);
-                # set result parameters and end the loop if the sms is successfully sent
+                # set result parameters
                 if(isset($apiResult["status"]) and $apiResult["status"] === true){
                     $result["status"] = true;
                     $result["error"] = "";
                     $result["api"] = $apiKey;
-                    break;
+                }
+                else{
+                    $failure = 1;
                 }
             }
-            catch (Exception $e){}    
+            catch (Exception $e){
+                $failure = 1;
+            }
+
+            # update api info in database
+            $query = "
+                UPDATE apis SET
+                    requests = requests + 1,
+                    fails = fails + $failure
+                WHERE
+                    api_key = $apiKey
+            ";
+            try{
+                $conn = self::connect();
+                $conn->query($query);
+            }
+            catch (Exception $e){}
+
+            # end the loop if the sms is successfully sent
+            if($result["status"] == true)
+                break;
         }
 
         # try to insert this sms record to database
@@ -108,8 +131,27 @@ class Sms{
 
     # echo simple html report page
     public static function report(){
-        echo "report";
-        # TODO
+        # sms count
+        echo "
+            <h1>All SMS sent: <span style='color: rgb(66, 107, 220);'>".self::getCount()."</span></h1>
+        ";
+
+        # apis information
+        $apiKeys = array_keys(Config::API_URLS);
+        foreach($apiKeys as $apiKey){
+            $apiInformation = self::getApiInformation($apiKey);
+            echo "
+                <h1>API $apiKey:</h1>
+                <h2>Requests: <span style='color: rgb(66, 107, 220);'>{$apiInformation['requests']}</span></h2>
+                <h2>
+                    Failure:
+                    <span style='color: rgb(66, 107, 220);'>
+                        {$apiInformation['fails']} / {$apiInformation['requests']}
+                        ({$apiInformation['failure_percentage']}%)
+                    </span>
+                </h2>
+            ";
+        }
     }
 
     # search for sms records in db with specific number and echo the records
@@ -156,6 +198,16 @@ class Sms{
                 sms_ids TEXT NOT NULL
             );
 
+            DROP TABLE IF EXISTS apis;
+
+            CREATE TABLE apis (
+                api_key INT(6) UNSIGNED PRIMARY KEY,
+                requests INT(6) UNSIGNED,
+                fails INT(6) UNSIGNED
+            );
+
+            INSERT INTO apis (api_key, requests, fails) VALUES (1, 0, 0);
+            INSERT INTO apis (api_key, requests, fails) VALUES (2, 0, 0);
         ";
         
         # try to connect and recreate database
@@ -178,6 +230,7 @@ class Sms{
         $query = "
             DROP TABLE IF EXISTS sms;
             DROP TABLE IF EXISTS users;
+            DROP TABLE IF EXISTS apis;
         ";
         
         # try to connect and remove database
@@ -196,12 +249,42 @@ class Sms{
 
     # return number of sms records
     private static function getCount(){
-        # TODO
+        try{
+            $conn = self::connect();
+            $query = "SELECT COUNT(*) AS count FROM sms";
+            $result = $conn->query($query);
+            
+            if($data = $result->fetch_assoc() and isset($data['count']))
+                return $data['count'];
+
+            return 0;
+            
+        }
+        catch (Exception $e){
+            return 0;
+        }
     }
 
     # return usage and failure percentage of each API
-    private static function getApiInformation(){
-        # TODO
+    private static function getApiInformation($apiKey){
+        $info = ["requests" => 0, "fails" => 0, "failure_percentage" => 0];
+        try{
+            $conn = self::connect();
+            $query = "SELECT requests, fails FROM apis WHERE api_key = $apiKey";
+            $result = $conn->query($query);
+            
+            if($data = $result->fetch_assoc())
+                $info = [
+                    "requests" => $data["requests"],
+                    "fails" => $data["fails"],
+                    "failure_percentage" => $data["requests"] != 0 ? $data["fails"] / $data["requests"] * 100 : 0,
+                ];                
+
+            return $info;
+        }
+        catch (Exception $e){
+            return $info;
+        }
     }
 
     # return ten number numbers with most sms records
@@ -261,7 +344,7 @@ class Sms{
         );
          
         $context = stream_context_create($options);
-         
+
         return file_get_contents(Config::API_URLS[$apiKey], false, $context);
     }
     
@@ -304,7 +387,7 @@ class Sms{
         ");
         if ($findQuery === false)
             throw new Exception($conn->error);
-        $findQuery->bind_param("s", $number);        
+        $findQuery->bind_param("s", $number);
         $findQuery->execute();
         
         $result = $findQuery->get_result();
@@ -337,6 +420,8 @@ class Sms{
         $smsIds[] = $id;
         $smsIds = json_encode($smsIds);
 
+        if ($findQuery === false)
+            throw new Exception($conn->error);
         $userQuery->bind_param("ss", $smsIds, $number);
         $userQuery->execute();
 
