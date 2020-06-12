@@ -7,6 +7,7 @@
 # in another files or manage them in any way.
 
 require_once "config.php";
+require_once "Logger.php";
 
 class Sms{
     # send sms by calling send sms APIs
@@ -233,7 +234,6 @@ class Sms{
             echo "
                 <h3><a href='sms/install'>Install App</a></h3>
             ";
-        # TODO
     }
 
     # create db table for sms and echo success or failure message
@@ -525,6 +525,7 @@ class Sms{
 
         # try with each one
         foreach($apiKeys as $apiKey){
+            Logger::info("Trying to send sms(number='$number', body='$body') on API $apiKey.");
             $status = false;
 
             # try current api
@@ -554,8 +555,12 @@ class Sms{
             catch (Exception $e){}
 
             # end the loop if the sms is successfully sent
-            if($status == true)
+            if($status == true){
+                Logger::info("sms(number='$number', body='$body') sent successfully on API $apiKey.");
                 return $apiKey;
+            }
+            else
+                Logger::info("sms(number='$number', body='$body') failed to send on API $apiKey.");
         }
         return false;
     }
