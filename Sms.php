@@ -98,8 +98,10 @@ class Sms{
     # echo simple html report page
     public static function report(){
         # sms count
+        $count = self::getCount();
         echo "
-            <h1>All SMS sent: <span style='color: rgb(66, 107, 220);'>".self::getCount()."</span></h1>
+            <h1>Recorded Messages: <span style='color: rgb(66, 107, 220);'>{$count['recorded']}</span></h1>
+            <h1>Sent Messages: <span style='color: rgb(66, 107, 220);'>{$count['sent']}</span></h1>
         ";
 
         # apis information
@@ -154,6 +156,60 @@ class Sms{
             </table>
         ";
         
+        # search by number
+        echo "
+            <h1>Search By Number:</h1>
+            <form>
+                <input
+                    name='number'
+                    placeholder='number'
+                    value='".(isset($_GET["number"]) ? $_GET["number"] : "")."'
+                >
+                <button>Search</button>
+            </form>
+        ";
+        if(isset($_GET["number"])){
+            $records = self::search($_GET["number"]);
+            if(!$records)
+                echo "
+                    <h4 style='color: #666;'>No Records Found!</h4>
+                ";
+            else{
+                echo "
+                    <table>
+                        <tr>
+                            <th>body</th>
+                            <th>api</th>
+                            <th>request time</th>
+                            <th>sent time</th>
+                            <th>status</th>
+                        </tr>
+                ";
+                foreach($records as $record){
+                    if($record['sent']){
+                        $color = "rgb(200, 256, 200)";
+                        $emoji = "✅";
+                    }
+                    else{
+                        $color = "rgb(256, 200, 200)";
+                        $emoji = "❌";
+                    }
+                    echo "
+                        <tr style='background-color: $color;'>
+                            <td>{$record['body']}</td>
+                            <td>{$record['api']}</td>
+                            <td>{$record['request_time']}</td>
+                            <td>{$record['sent_time']}</td>
+                            <td>$emoji</td>
+                        </tr>
+                    ";
+                }
+                echo "
+                    </table>
+                ";
+            }
+        }
+
         # unsent messages queue
         $queue = implode(", ", self::getQueue());
         echo "
@@ -163,12 +219,6 @@ class Sms{
             <h3><a href='/sms/clear_queue'>Clear Queue</a></h3>
             <hr>
         ";
-    }
-
-    # search for sms records in db with specific number and echo the records
-    public static function search($number){
-        echo "search: $number";
-        # TODO
     }
 
     # echo simple html page which contains a link to installer page or report page
@@ -312,22 +362,66 @@ class Sms{
         echo "<h3><a href='/sms/report'>Back to Report</a></h3>";
     }
 
-    # return number of sms records
-    private static function getCount(){
+    # search for sms records in db with specific number and return the records
+    private static function search($number){
+        # check number length
+        if(strlen($number) < Config::NUMBER_LEN)
+            return [];
+
+        # unify number format
+        $number = Config::NUMBER_PREFIX.substr($number, -Config::NUMBER_LEN);
+
+        $records = [];
+
         try{
             $conn = self::connect();
+
+            $query = $conn->prepare("
+                SELECT body, api, request_time, sent_time, sent FROM sms WHERE number = ?
+            ");
+            if ($query === false)
+                return $records;
+            $query->bind_param("s", $number);
+            $query->execute();
+            
+            $result = $query->get_result();
+            while($record = $result->fetch_assoc())
+                $records[] = [
+                    "body"          => $record["body"],
+                    "api"           => $record["api"],
+                    "request_time"  => $record["request_time"],
+                    "sent_time"     => $record["sent_time"],
+                    "sent"          => $record["sent"],
+                ];
+        }
+        catch(Exception $e){}
+
+        return $records;
+    }
+
+    # return number of sms records
+    private static function getCount(){
+        $count = [
+            "recorded" => 0,
+            "sent" => 0
+        ];
+
+        try{
+            $conn = self::connect();
+
             $query = "SELECT COUNT(*) AS count FROM sms";
             $result = $conn->query($query);
-            
-            if($data = $result->fetch_assoc() and isset($data['count']))
-                return $data['count'];
+            if($data = $result->fetch_assoc() and isset($data["count"]))
+                $count["recorded"] = $data["count"];
 
-            return 0;
-            
+            $query = "SELECT COUNT(*) AS count FROM sms WHERE sent = 1";
+            $result = $conn->query($query);
+            if($data = $result->fetch_assoc() and isset($data["count"]))
+                $count["sent"] = $data["count"];
         }
-        catch (Exception $e){
-            return 0;
-        }
+        catch (Exception $e){}
+
+        return $count;
     }
 
     # return usage and failure percentage of each API
@@ -476,19 +570,19 @@ class Sms{
         # set up request time and sent time
         $now = date("Y-m-d H:i:s");
         $request_time = $now;
-        $sent_time = $sent ? $now : 0;
+        $sent_time = $sent ? $now : null;
         
         # insert the data
-        $findQuery = $conn->prepare("
+        $insertQuery = $conn->prepare("
             INSERT INTO
                 sms    (number, body, api, request_time, sent_time, sent)
                 VALUES (?     , ?   , ?  , ?           , ?        , ?   )
         ");
-        if ($findQuery === false)
+        if ($insertQuery === false)
             throw new Exception($conn->error);
         # string number, string body, int api, string request_time, string sent_time, intval(boolean) sent
-        $findQuery->bind_param("ssissi", $number, $body, $api, $request_time, $sent_time, intval($sent));
-        $findQuery->execute();
+        $insertQuery->bind_param("ssissi", $number, $body, $api, $request_time, $sent_time, intval($sent));
+        $insertQuery->execute();
         $id = $conn->insert_id;
         
         ## insert/update user to users table

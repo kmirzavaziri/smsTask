@@ -31,12 +31,6 @@ routeSmsReport:
   controller: Sms::report
   methods:    GET
 
-# report page search route
-routeSmsSearch:
-  path:       /sms/report/{phone}
-  controller: Sms::search
-  methods:    GET
-
 # clear queue page route
 routeClearQueue:
   path:       /sms/clear_queue
