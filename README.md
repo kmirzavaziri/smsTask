@@ -70,6 +70,8 @@ Also you may send request to the following link in specific periods of time to a
 localhost:80/sms/clear_queue
 ```
 
+One can find the log files in the log folder.
+
 ## Test
 One can send random requests to api using
 
