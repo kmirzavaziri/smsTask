@@ -1,6 +1,9 @@
 <?php
-# index.php
-# This file only relates defined routes to methods of class Sms in Sms.php
+/**
+ * Index
+ *
+ * Only relates defined routes to methods of class Sms in file Sms.php.
+ */
 
 require_once './vendor/autoload.php';
 require_once 'Sms.php';
@@ -19,18 +22,18 @@ try{
     $requestContext = new RequestContext();
     $requestContext->fromRequest(Request::createFromGlobals());
  
-    # load all routes from routes.yaml
+    // load all routes from routes.yaml
     $router = new Router(
         new YamlFileLoader($fileLocator),
         'routes.yaml',
-        [/* 'cache_dir' => __DIR__.'/cache' */],
+        ['cache_dir' => __DIR__.'/cache'],
         $requestContext
     );
  
-    # find the current route
+    // find the current route
     $parameters = $router->match($requestContext->getPathInfo());
     
-    # call the related function
+    // call the related function
     $passParameters = [];
     foreach($parameters as $key => $value)
         if($key[0] != "_")
@@ -39,5 +42,6 @@ try{
 
 }
 catch (ResourceNotFoundException $e){
+    // echo proper message if there is no route
     echo $e->getMessage();
 }

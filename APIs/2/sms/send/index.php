@@ -1,4 +1,9 @@
 <?php
+/**
+ * API 82
+ *
+ * A mock API end-point to send sms. fails 77% of times.
+ */
 
 echo
     rand(0, 99) < 77
