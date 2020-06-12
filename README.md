@@ -67,5 +67,5 @@ localhost:80/sms/report
 Also you may send request to the following link in specific periods of time to ask the api to send unsent messages.
 
 ```
-localhost:80/sms/clean_queue
+localhost:80/sms/clear_queue
 ```
